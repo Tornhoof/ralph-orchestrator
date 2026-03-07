@@ -282,57 +282,49 @@ impl ServerHandler for RalphMcpServer {
         self.catalog.lookup(name).map(|entry| entry.tool.clone())
     }
 
-    fn call_tool(
+    async fn call_tool(
         &self,
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CallToolResult, ErrorData>> + Send + '_ {
-        async move {
-            let request_id = context.id.to_string();
-            let Some(entry) = self.catalog.lookup(request.name.as_ref()) else {
-                return Err(ErrorData::new(
-                    ErrorCode::METHOD_NOT_FOUND,
-                    format!("tool '{}' is not available", request.name),
-                    None,
-                ));
-            };
+    ) -> Result<CallToolResult, ErrorData> {
+        let request_id = context.id.to_string();
+        let Some(entry) = self.catalog.lookup(request.name.as_ref()) else {
+            return Err(ErrorData::new(
+                ErrorCode::METHOD_NOT_FOUND,
+                format!("tool '{}' is not available", request.name),
+                None,
+            ));
+        };
 
-            let arguments = Value::Object(request.arguments.unwrap_or_default());
-            if let Err(errors) = entry.validate_input(&arguments) {
-                let error = ApiError::invalid_params(format!(
-                    "tool '{}' arguments do not match the published schema",
-                    request.name
-                ))
-                .with_context(request_id.clone(), Some(entry.method_name().to_string()))
-                .with_details(json!({ "errors": errors }));
-                return Ok(tool_error_result(error));
-            }
+        let arguments = Value::Object(request.arguments.unwrap_or_default());
+        if let Err(errors) = entry.validate_input(&arguments) {
+            let error = ApiError::invalid_params(format!(
+                "tool '{}' arguments do not match the published schema",
+                request.name
+            ))
+            .with_context(request_id.clone(), Some(entry.method_name().to_string()))
+            .with_details(json!({ "errors": errors }));
+            return Ok(tool_error_result(error));
+        }
 
-            let result = match &entry.target {
-                ToolTarget::Rpc { method } => match method.as_str() {
-                    "stream.subscribe" => {
-                        self.call_stream_subscribe(arguments, &request_id, entry.tool.name.as_ref())
-                            .await
-                    }
-                    "stream.unsubscribe" => {
-                        self.call_stream_unsubscribe(
-                            arguments,
-                            &request_id,
-                            entry.tool.name.as_ref(),
-                        )
+        let result = match &entry.target {
+            ToolTarget::Rpc { method } => match method.as_str() {
+                "stream.subscribe" => {
+                    self.call_stream_subscribe(arguments, &request_id, entry.tool.name.as_ref())
                         .await
-                    }
-                    _ => {
-                        self.call_rpc_tool(method, arguments, &request_id, entry.tool.name.as_ref())
-                    }
-                },
-                ToolTarget::StreamNext => self.call_stream_next(arguments, &request_id).await,
-            };
+                }
+                "stream.unsubscribe" => {
+                    self.call_stream_unsubscribe(arguments, &request_id, entry.tool.name.as_ref())
+                        .await
+                }
+                _ => self.call_rpc_tool(method, arguments, &request_id, entry.tool.name.as_ref()),
+            },
+            ToolTarget::StreamNext => self.call_stream_next(arguments, &request_id).await,
+        };
 
-            match result {
-                Ok(result) => Ok(result),
-                Err(error) => Ok(tool_error_result(error)),
-            }
+        match result {
+            Ok(result) => Ok(result),
+            Err(error) => Ok(tool_error_result(error)),
         }
     }
 }
@@ -544,8 +536,10 @@ fn collect_live_events(
                 dropped_count = dropped_count.saturating_add(skipped as usize);
                 break;
             }
-            Err(broadcast::error::TryRecvError::Empty)
-            | Err(broadcast::error::TryRecvError::Closed) => break,
+            Err(
+                broadcast::error::TryRecvError::Empty
+                | broadcast::error::TryRecvError::Closed,
+            ) => break,
         }
     }
 
