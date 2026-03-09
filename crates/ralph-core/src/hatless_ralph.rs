@@ -110,7 +110,6 @@ impl HatTopology {
                         let receivers: Vec<EventReceiver> = registry
                             .subscribers(pub_topic)
                             .into_iter()
-                            .filter(|h| h.id != hat.id) // Exclude self
                             .map(|h| EventReceiver {
                                 name: h.name.clone(),
                                 description: h.description.clone(),
@@ -2200,8 +2199,8 @@ hats:
     }
 
     #[test]
-    fn test_event_publishing_guide_excludes_self() {
-        // If a hat subscribes to its own event, it should NOT be listed as receiver
+    fn test_event_publishing_guide_includes_self() {
+        // If a hat subscribes to its own event (self-loop), it should be listed as receiver
         let yaml = r#"
 hats:
   looper:
@@ -2220,10 +2219,50 @@ hats:
             prompt.contains("### Event Publishing Guide"),
             "Should include guide"
         );
-        // Self-reference should be excluded, so should fall back to Ralph
+        // Self-loop: looper publishes loop.continue and triggers on it
         assert!(
-            prompt.contains("`loop.continue` → Received by: Ralph (coordinates next steps)"),
-            "Self-subscription should be excluded, falling back to Ralph"
+            prompt.contains("`loop.continue` → Received by: Looper"),
+            "Self-loop event should show the hat itself as receiver"
+        );
+    }
+
+    #[test]
+    fn test_event_publishing_guide_self_loop_shows_self_as_receiver() {
+        // When a hat publishes an event that it also triggers on (self-loop),
+        // the guide should show the hat itself as the receiver, not "Ralph"
+        let yaml = r#"
+hats:
+  processor:
+    name: "Processor"
+    description: "Processes work with retry"
+    triggers: ["start", "process.retry"]
+    publishes: ["process.done", "process.retry"]
+  validator:
+    name: "Validator"
+    triggers: ["process.done"]
+    publishes: ["validate.pass"]
+"#;
+        let config: RalphConfig = serde_yaml::from_str(yaml).unwrap();
+        let registry = HatRegistry::from_config(&config);
+        let ralph = HatlessRalph::new("LOOP_COMPLETE", config.core.clone(), &registry, None);
+
+        let processor = registry.get(&ralph_proto::HatId::new("processor")).unwrap();
+        let prompt = ralph.build_prompt("[start] Go", &[processor]);
+
+        // process.retry routes back to Processor itself — should say so
+        assert!(
+            prompt.contains("`process.retry` → Received by: Processor"),
+            "Self-loop event should show the hat itself as receiver, not Ralph. Got:\n{}",
+            prompt
+                .lines()
+                .filter(|l| l.contains("process.retry"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        // process.done routes to Validator — should still work
+        assert!(
+            prompt.contains("`process.done` → Received by: Validator"),
+            "Non-self event should still show correct receiver"
         );
     }
 
