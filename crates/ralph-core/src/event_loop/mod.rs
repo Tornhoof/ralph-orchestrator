@@ -1916,6 +1916,47 @@ impl EventLoop {
         Value::Object(context)
     }
 
+    fn is_restart_request_payload(payload: &str) -> bool {
+        let payload = payload.to_ascii_lowercase();
+        payload.contains("restart yourself") || payload.contains("restart ralph")
+    }
+
+    fn is_restart_request_event(event: &Event) -> bool {
+        matches!(event.topic.as_str(), "human.response" | "user.prompt")
+            && Self::is_restart_request_payload(&event.payload)
+    }
+
+    fn mark_restart_requested(&self, source: &str) {
+        let restart_path =
+            std::path::Path::new(&self.config.core.workspace_root).join(".ralph/restart-requested");
+
+        if let Some(parent) = restart_path.parent()
+            && let Err(err) = std::fs::create_dir_all(parent)
+        {
+            warn!(
+                error = %err,
+                path = %parent.display(),
+                "Failed to create restart-requested parent directory"
+            );
+            return;
+        }
+
+        if let Err(err) = std::fs::write(&restart_path, source) {
+            warn!(
+                error = %err,
+                path = %restart_path.display(),
+                "Failed to write restart-requested signal"
+            );
+            return;
+        }
+
+        info!(
+            source,
+            path = %restart_path.display(),
+            "Restart requested from human text"
+        );
+    }
+
     /// Processes events from JSONL and routes orphaned events to Ralph.
     ///
     /// Also handles backpressure for malformed JSONL lines by:
@@ -2433,6 +2474,14 @@ impl EventLoop {
             }
 
             human_interact_context = Some(Value::Object(context));
+        }
+
+        let restart_requested = validated_events.iter().any(Self::is_restart_request_event)
+            || response_event
+                .as_ref()
+                .is_some_and(Self::is_restart_request_event);
+        if restart_requested {
+            self.mark_restart_requested("human_text");
         }
 
         // Track whether any events will be published (before the loop consumes them).

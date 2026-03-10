@@ -4090,6 +4090,37 @@ impl ralph_proto::RobotService for MockRobotService {
     fn stop(self: Box<Self>) {}
 }
 
+struct RestartRequestRobotService;
+
+impl ralph_proto::RobotService for RestartRequestRobotService {
+    fn send_question(&self, _payload: &str) -> anyhow::Result<i32> {
+        Ok(1)
+    }
+
+    fn wait_for_response(&self, _events_path: &Path) -> anyhow::Result<Option<String>> {
+        Ok(Some("Please restart yourself now".to_string()))
+    }
+
+    fn send_checkin(
+        &self,
+        _: u32,
+        _: Duration,
+        _: Option<&ralph_proto::CheckinContext>,
+    ) -> anyhow::Result<i32> {
+        Ok(0)
+    }
+
+    fn timeout_secs(&self) -> u64 {
+        5
+    }
+
+    fn shutdown_flag(&self) -> Arc<AtomicBool> {
+        Arc::new(AtomicBool::new(false))
+    }
+
+    fn stop(self: Box<Self>) {}
+}
+
 #[test]
 fn test_human_timeout_injects_timeout_event() {
     use tempfile::TempDir;
@@ -4141,5 +4172,50 @@ fn test_human_response_still_works() {
     assert!(
         event_loop.has_pending_events(),
         "human.response event should be published when response received"
+    );
+}
+
+#[test]
+fn test_user_prompt_restart_request_creates_restart_signal_file() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let events_path = temp_dir.path().join("events.jsonl");
+
+    let mut config = RalphConfig::default();
+    config.core.workspace_root = temp_dir.path().to_path_buf();
+    let mut event_loop = EventLoop::new(config);
+    event_loop.initialize("Test");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
+
+    write_event_to_jsonl(&events_path, "user.prompt", "Please restart yourself");
+    let _ = event_loop.process_events_from_jsonl();
+
+    assert!(
+        temp_dir.path().join(".ralph/restart-requested").exists(),
+        "user.prompt restart request should create restart signal file"
+    );
+}
+
+#[test]
+fn test_human_response_restart_request_creates_restart_signal_file() {
+    use tempfile::TempDir;
+
+    let temp_dir = TempDir::new().unwrap();
+    let events_path = temp_dir.path().join("events.jsonl");
+
+    let mut config = RalphConfig::default();
+    config.core.workspace_root = temp_dir.path().to_path_buf();
+    let mut event_loop = EventLoop::new(config);
+    event_loop.initialize("Test");
+    event_loop.event_reader = crate::event_reader::EventReader::new(&events_path);
+    event_loop.set_robot_service(Box::new(RestartRequestRobotService));
+
+    write_event_to_jsonl(&events_path, "human.interact", "Need approval");
+    let _ = event_loop.process_events_from_jsonl();
+
+    assert!(
+        temp_dir.path().join(".ralph/restart-requested").exists(),
+        "human.response restart request should create restart signal file"
     );
 }
