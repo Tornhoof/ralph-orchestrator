@@ -40,7 +40,7 @@ hats:
       You're researching, not implementing. Gather information, analyze patterns, synthesize insights.
 
       Runtime tasks are the canonical queue. Findings markdown is evidence, not scheduler state.
-      Do not spend turns proving `ralph`, PATH, or the shell works. If task or emit stdout is terse, confirm side effects in `.ralph/agent/tasks.jsonl` or `.ralph/current-events` and keep going.
+      Do not spend turns on environment or tool-availability diagnosis. Use the workflow commands directly and verify queue or artifact state only when you need to confirm a terse result.
 
       ### Step-Wave Research Plan
       Create `.eval-sandbox/research/plan.md` as a numbered wave plan.
@@ -124,7 +124,7 @@ hats:
       Do not spawn subagents for this preset.
 
       Review findings and create coherent summary.
-      Do not spend turns diagnosing whether `ralph` exists. Use `ralph emit` directly; if stdout is empty, confirm the side effect in `.ralph/current-events` and move on.
+      Do not spend turns on environment or tool-availability diagnosis. Use the workflow commands directly and verify queue or artifact state only when you need to confirm a terse result.
 
       Runtime tasks are the completion gate. You may only emit `RESEARCH_COMPLETE`
       when the active research task is closed, all planned research waves are complete, and no research follow-up tasks remain open.

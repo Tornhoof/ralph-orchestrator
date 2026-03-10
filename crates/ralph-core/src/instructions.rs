@@ -178,16 +178,11 @@ Runtime work state lives in `ralph tools task`, not in ad hoc markdown checklist
 You MUST check `<ready-tasks>` before creating more tasks.
 If this iteration creates or discovers durable work, you MUST represent it with `ralph tools task ensure`, `start`, `close`, `reopen`, or `fail` as appropriate.
 If you are entering an unfamiliar area, you SHOULD search memories with `ralph tools memory search` before acting.
-You MUST NOT spend iterations debugging PATH, shell startup files, or whether `ralph` exists. If the loop is running, assume `ralph emit` and `ralph tools` are available and use them directly.
+You SHOULD assume the workflow commands are available when the loop is already running and use the task-specific command you actually need.
 The loop sets `$RALPH_BIN` to the current Ralph executable. Prefer `$RALPH_BIN emit ...` and `$RALPH_BIN tools ...` when you need a direct command form.
-You MUST NEVER run `which ralph`, `type ralph`, `ralph --version`, or similar availability probes inside the loop.
-You MUST NEVER burn turns on environment-probe commands such as `echo`, `pwd`, `ls`, `id`, `stat`, `command -v`, `which`, `type`, or tool `--version` checks unless the task is specifically about diagnosing the shell/runtime.
-You MUST NOT infer command failure from empty or terse stdout alone. Confirm side effects instead:
-- `ralph tools task ...` -> inspect `.ralph/agent/tasks.jsonl`
-- `ralph emit ...` -> inspect `.ralph/current-events` or `.ralph/events-*.jsonl`
-- build/test/file commands -> inspect the files they changed or wrote
-You MUST prefer task-specific commands and side-effect checks over `which`, `type`, `--version`, `echo`, `pwd`, `ls`, or PATH probes.
-You MUST NOT redirect scratch output or temporary logs into `/tmp`. Use `/var/tmp` or a project-local `logs/` directory instead.
+Do not spend iterations on shell or tool-availability diagnosis unless the task is explicitly about the runtime environment.
+If a command's stdout is empty or terse, verify the intended side effect in the task/event state or in the files and artifacts the command should have changed.
+Keep temporary artifacts where later steps can still inspect them, such as a repo-local `logs/` directory or `/var/tmp` when needed.
 If a command fails, a dependency is missing, or you become blocked, you MUST record a `fix` memory with `ralph tools memory add`.
 If the issue is not resolved in the same iteration, you MUST fail or reopen the relevant runtime task before stopping.
 If your confidence is 80 or below on a consequential decision, you MUST document it in `.ralph/agent/decisions.md`.

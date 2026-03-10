@@ -39,8 +39,7 @@ hats:
 
       Review code for correctness, clarity, and maintainability using a staged,
       adversarial workflow.
-      Do not waste turns on `which`, `type`, `--version`, PATH, or shell diagnostics.
-      Use `ralph tools task` and `ralph emit` directly. If stdout is terse, confirm side effects in `.ralph/agent/tasks.jsonl` or `.ralph/current-events`.
+      Do not spend turns on environment or tool-availability diagnosis. Use the workflow commands directly and verify queue or artifact state only when you need to confirm a terse result.
 
       Runtime tasks are the canonical queue.
       Create `.eval-sandbox/review/plan.md` as a numbered review-wave plan:

@@ -440,16 +440,11 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
 \n\
 **Rule:** Work items go in tasks. Thinking goes in scratchpad. Learnings go in memories. Decisions with confidence <= 80 go in `.ralph/agent/decisions.md`.\n\
 \n\
-**Tool reliability rule:** Do NOT waste turns debugging PATH, shell startup files, or whether `ralph` exists. If the loop is running, assume `ralph emit` and `ralph tools` are available.\n\
+**Tool reliability rule:** Assume the workflow commands are available when the loop is already running and use the task-specific command you actually need.\n\
 The loop sets `$RALPH_BIN` to the current Ralph executable. Prefer `$RALPH_BIN emit ...` and `$RALPH_BIN tools ...` when you need a direct command form.\n\
-You MUST NEVER run `which ralph`, `type ralph`, `ralph --version`, or similar availability probes inside the loop.\n\
-You MUST NEVER burn turns on environment-probe commands such as `echo`, `pwd`, `ls`, `id`, `stat`, `command -v`, `which`, `type`, or tool `--version` checks unless the task is specifically about diagnosing the shell/runtime.\n\
-You MUST NOT redirect scratch output or temporary logs into `/tmp`. Use `/var/tmp` or a project-local `logs/` directory instead.\n\
-Do NOT infer failure from empty or terse stdout alone.\n\
-- Confirm task commands by reading `.ralph/agent/tasks.jsonl`\n\
-- Confirm emits by reading `.ralph/current-events` or `.ralph/events-*.jsonl`\n\
-- Confirm file/build/test commands by reading the files or artifacts they changed\n\
-Prefer real work commands and side-effect checks over `which`, `type`, `--version`, `echo`, or PATH probes.\n\
+Do not spend turns on shell or tool-availability diagnosis unless the task is explicitly about the runtime environment.\n\
+Do NOT infer failure from empty or terse stdout alone. Verify the intended side effect in the task/event state or in the files and artifacts the command should have changed.\n\
+Keep temporary artifacts where later steps can still inspect them, such as a repo-local `logs/` directory or `/var/tmp` when needed.\n\
 \n",
             scratchpad = self.core.scratchpad,
         ));
