@@ -6,7 +6,7 @@
 #[cfg(test)]
 use crate::cli_backend::PromptMode;
 use crate::cli_backend::{CliBackend, OutputFormat};
-use crate::copilot_stream::CopilotStreamParser;
+use crate::copilot_stream::{CopilotLiveChunk, CopilotStreamParser, CopilotStreamState};
 #[cfg(unix)]
 use nix::sys::signal::{Signal, kill};
 #[cfg(unix)]
@@ -17,6 +17,7 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 /// Result of a CLI execution.
@@ -36,6 +37,14 @@ pub struct ExecutionResult {
 #[derive(Debug)]
 pub struct CliExecutor {
     backend: CliBackend,
+}
+
+enum StreamEvent {
+    Stdout(String),
+    Stderr(String),
+    StdoutClosed,
+    StderrClosed,
+    ReadError(std::io::Error),
 }
 
 impl CliExecutor {
@@ -104,97 +113,120 @@ impl CliExecutor {
         // This prevents deadlock when stderr fills its buffer before stdout produces output
         let stdout_handle = child.stdout.take();
         let stderr_handle = child.stderr.take();
+        let is_copilot_stream = self.backend.output_format == OutputFormat::CopilotStreamJson;
 
-        // Wrap the streaming in a timeout if configured
-        // Read stdout and stderr CONCURRENTLY to avoid pipe buffer deadlock
-        let stream_result = async {
-            // Create futures for reading both streams
-            let stdout_future = async {
-                let mut lines_out = Vec::new();
-                if let Some(stdout) = stdout_handle {
-                    let reader = BufReader::new(stdout);
-                    let mut lines = reader.lines();
-                    while let Some(line) = lines.next_line().await? {
-                        lines_out.push(line);
-                    }
-                }
-                Ok::<_, std::io::Error>(lines_out)
-            };
+        let (event_tx, mut event_rx) = mpsc::channel::<StreamEvent>(256);
+        let mut reader_tasks = Vec::new();
+        let mut open_streams = 0usize;
 
-            let stderr_future = async {
-                let mut lines_out = Vec::new();
-                if let Some(stderr) = stderr_handle {
-                    let reader = BufReader::new(stderr);
-                    let mut lines = reader.lines();
-                    while let Some(line) = lines.next_line().await? {
-                        lines_out.push(line);
-                    }
-                }
-                Ok::<_, std::io::Error>(lines_out)
-            };
-
-            // Read both streams concurrently to prevent deadlock
-            let (stdout_lines, stderr_lines) = tokio::try_join!(stdout_future, stderr_future)?;
-
-            // Write stdout lines first (main output)
-            for line in &stdout_lines {
-                if self.backend.output_format == OutputFormat::CopilotStreamJson {
-                    if let Some(text) = CopilotStreamParser::extract_text(line) {
-                        write!(output_writer, "{text}")?;
-                        if !text.ends_with('\n') {
-                            writeln!(output_writer)?;
+        if let Some(stdout) = stdout_handle {
+            open_streams += 1;
+            let event_tx = event_tx.clone();
+            reader_tasks.push(tokio::spawn(async move {
+                let reader = BufReader::new(stdout);
+                let mut lines = reader.lines();
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => {
+                            if event_tx.send(StreamEvent::Stdout(line)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(err) => {
+                            let _ = event_tx.send(StreamEvent::ReadError(err)).await;
+                            break;
                         }
                     }
-                } else {
-                    writeln!(output_writer, "{line}")?;
                 }
-            }
+                let _ = event_tx.send(StreamEvent::StdoutClosed).await;
+            }));
+        }
 
-            // Write stderr lines (prefixed) only in verbose mode
-            if verbose {
-                for line in &stderr_lines {
-                    writeln!(output_writer, "[stderr] {line}")?;
-                }
-            }
-
-            output_writer.flush()?;
-
-            // Build accumulated output (stdout first, then stderr)
-            let mut accumulated = String::new();
-            for line in stdout_lines {
-                accumulated.push_str(&line);
-                accumulated.push('\n');
-            }
-            for line in stderr_lines {
-                accumulated.push_str("[stderr] ");
-                accumulated.push_str(&line);
-                accumulated.push('\n');
-            }
-
-            Ok::<_, std::io::Error>(accumulated)
-        };
-
-        let accumulated_output = match timeout {
-            Some(duration) => {
-                debug!(timeout_secs = duration.as_secs(), "Executing with timeout");
-                match tokio::time::timeout(duration, stream_result).await {
-                    Ok(result) => result?,
-                    Err(_) => {
-                        // Timeout elapsed - send SIGTERM to the child process
-                        warn!(
-                            timeout_secs = duration.as_secs(),
-                            "Execution timeout reached, sending SIGTERM"
-                        );
-                        timed_out = true;
-                        Self::terminate_child(&mut child)?;
-                        String::new() // Return empty output on timeout
+        if let Some(stderr) = stderr_handle {
+            open_streams += 1;
+            let event_tx = event_tx.clone();
+            reader_tasks.push(tokio::spawn(async move {
+                let reader = BufReader::new(stderr);
+                let mut lines = reader.lines();
+                loop {
+                    match lines.next_line().await {
+                        Ok(Some(line)) => {
+                            if event_tx.send(StreamEvent::Stderr(line)).await.is_err() {
+                                break;
+                            }
+                        }
+                        Ok(None) => break,
+                        Err(err) => {
+                            let _ = event_tx.send(StreamEvent::ReadError(err)).await;
+                            break;
+                        }
                     }
                 }
+                let _ = event_tx.send(StreamEvent::StderrClosed).await;
+            }));
+        }
+
+        drop(event_tx);
+
+        let deadline = timeout.map(|duration| {
+            debug!(timeout_secs = duration.as_secs(), "Executing with timeout");
+            tokio::time::Instant::now() + duration
+        });
+
+        let mut accumulated_output = String::new();
+        let mut copilot_state = CopilotStreamState::new();
+
+        while open_streams > 0 {
+            let maybe_event = if let Some(deadline) = deadline {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    warn!("Execution timeout reached, sending SIGTERM");
+                    timed_out = true;
+                    Self::terminate_child(&mut child)?;
+                    break;
+                }
+
+                match tokio::time::timeout(deadline - now, event_rx.recv()).await {
+                    Ok(event) => event,
+                    Err(_) => {
+                        warn!("Execution timeout reached, sending SIGTERM");
+                        timed_out = true;
+                        Self::terminate_child(&mut child)?;
+                        break;
+                    }
+                }
+            } else {
+                event_rx.recv().await
+            };
+
+            let Some(event) = maybe_event else {
+                break;
+            };
+
+            match event {
+                StreamEvent::Stdout(line) => handle_stdout_line(
+                    &line,
+                    &mut output_writer,
+                    &mut accumulated_output,
+                    is_copilot_stream,
+                    &mut copilot_state,
+                )?,
+                StreamEvent::Stderr(line) => {
+                    handle_stderr_line(&line, &mut output_writer, &mut accumulated_output, verbose)?
+                }
+                StreamEvent::StdoutClosed | StreamEvent::StderrClosed => {
+                    open_streams = open_streams.saturating_sub(1);
+                }
+                StreamEvent::ReadError(err) => return Err(err),
             }
-            None => stream_result.await?,
-        };
+        }
 
         let status = child.wait().await?;
+        for task in reader_tasks {
+            task.await
+                .map_err(|err| std::io::Error::other(err.to_string()))?;
+        }
 
         Ok(ExecutionResult {
             output: accumulated_output,
@@ -243,6 +275,63 @@ impl CliExecutor {
         let sink = std::io::sink();
         self.execute(prompt, sink, timeout, false).await
     }
+}
+
+fn handle_stdout_line<W: Write>(
+    line: &str,
+    output_writer: &mut W,
+    accumulated_output: &mut String,
+    is_copilot_stream: bool,
+    copilot_state: &mut CopilotStreamState,
+) -> std::io::Result<()> {
+    accumulated_output.push_str(line);
+    accumulated_output.push('\n');
+
+    if is_copilot_stream {
+        if let Some(chunk) = CopilotStreamParser::extract_live_chunk(line, copilot_state) {
+            write_copilot_chunk(output_writer, chunk)?;
+        }
+    } else {
+        writeln!(output_writer, "{line}")?;
+        output_writer.flush()?;
+    }
+
+    Ok(())
+}
+
+fn handle_stderr_line<W: Write>(
+    line: &str,
+    output_writer: &mut W,
+    accumulated_output: &mut String,
+    verbose: bool,
+) -> std::io::Result<()> {
+    accumulated_output.push_str("[stderr] ");
+    accumulated_output.push_str(line);
+    accumulated_output.push('\n');
+
+    if verbose {
+        writeln!(output_writer, "[stderr] {line}")?;
+        output_writer.flush()?;
+    }
+
+    Ok(())
+}
+
+fn write_copilot_chunk<W: Write>(
+    output_writer: &mut W,
+    chunk: CopilotLiveChunk,
+) -> std::io::Result<()> {
+    if !chunk.text.is_empty() {
+        write!(output_writer, "{}", chunk.text)?;
+    }
+
+    if chunk.append_newline && !chunk.text.ends_with('\n') {
+        writeln!(output_writer)?;
+    } else {
+        output_writer.flush()?;
+    }
+
+    Ok(())
 }
 
 fn inject_ralph_runtime_env(command: &mut Command, workspace_root: &std::path::Path) {
@@ -420,5 +509,59 @@ mod tests {
         assert!(result.success);
         assert!(result.output.contains("\"assistant.message\""));
         assert_eq!(String::from_utf8(output).unwrap(), "hello from copilot\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_copilot_stream_streams_message_deltas_once() {
+        let backend = CliBackend {
+            command: "printf".to_string(),
+            args: vec![
+                "%s\n%s\n%s\n".to_string(),
+                r#"{"type":"assistant.message_delta","data":{"messageId":"msg-1","deltaContent":"Hello"}}"#
+                    .to_string(),
+                r#"{"type":"assistant.message_delta","data":{"messageId":"msg-1","deltaContent":" world"}}"#
+                    .to_string(),
+                r#"{"type":"assistant.message","data":{"messageId":"msg-1","content":"Hello world"}}"#
+                    .to_string(),
+            ],
+            prompt_mode: PromptMode::Stdin,
+            prompt_flag: None,
+            output_format: OutputFormat::CopilotStreamJson,
+            env_vars: vec![],
+        };
+
+        let executor = CliExecutor::new(backend);
+        let mut output = Vec::new();
+
+        let result = executor
+            .execute("ignored", &mut output, None, false)
+            .await
+            .unwrap();
+
+        assert!(result.success);
+        assert_eq!(String::from_utf8(output).unwrap(), "Hello world\n");
+    }
+
+    #[tokio::test]
+    async fn test_execute_streams_output_before_timeout() {
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string(), "printf 'hello\\n'; sleep 10".to_string()],
+            prompt_mode: PromptMode::Stdin,
+            prompt_flag: None,
+            output_format: OutputFormat::Text,
+            env_vars: vec![],
+        };
+
+        let executor = CliExecutor::new(backend);
+        let mut output = Vec::new();
+        let result = executor
+            .execute("", &mut output, Some(Duration::from_millis(200)), false)
+            .await
+            .unwrap();
+
+        assert!(result.timed_out);
+        assert_eq!(String::from_utf8(output).unwrap(), "hello\n");
+        assert!(result.output.contains("hello"));
     }
 }
