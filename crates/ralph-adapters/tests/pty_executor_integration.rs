@@ -689,4 +689,42 @@ NDJSON
             result.extracted_text
         );
     }
+
+    #[tokio::test]
+    async fn run_observe_streaming_copilot_stream_extracts_assistant_text() {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let backend = CliBackend {
+            command: "sh".to_string(),
+            args: vec!["-c".to_string()],
+            prompt_mode: PromptMode::Arg,
+            prompt_flag: None,
+            output_format: OutputFormat::CopilotStreamJson,
+            env_vars: vec![],
+        };
+        let config = PtyConfig {
+            interactive: false,
+            idle_timeout_secs: 0,
+            cols: 80,
+            rows: 24,
+            workspace_root: temp_dir.path().to_path_buf(),
+        };
+        let executor = PtyExecutor::new(backend, config);
+        let (_tx, rx) = tokio::sync::watch::channel(false);
+        let mut handler = CapturingHandler::default();
+
+        let script = r#"printf '%s\n' \
+'{"type":"assistant.turn_start","data":{"turnId":"0"}}' \
+'{"type":"assistant.message","data":{"content":"Hello from Copilot"}}' \
+'{"type":"result","exitCode":0}'"#;
+
+        let result = executor
+            .run_observe_streaming(script, rx, &mut handler)
+            .await
+            .expect("run_observe_streaming");
+
+        assert!(result.success);
+        assert_eq!(handler.texts, vec!["Hello from Copilot".to_string()]);
+        assert_eq!(result.extracted_text, "Hello from Copilot\n");
+        assert!(handler.completions.is_empty());
+    }
 }

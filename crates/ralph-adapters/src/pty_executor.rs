@@ -20,6 +20,7 @@
 
 use crate::claude_stream::{ClaudeStreamEvent, ClaudeStreamParser, ContentBlock, UserContentBlock};
 use crate::cli_backend::{CliBackend, OutputFormat};
+use crate::copilot_stream::CopilotStreamParser;
 use crate::pi_stream::{PiSessionState, PiStreamParser, dispatch_pi_stream_event};
 use crate::stream_handler::{SessionResult, StreamHandler};
 #[cfg(unix)]
@@ -613,9 +614,11 @@ impl PtyExecutor {
         let output_format = self.backend.output_format;
 
         // StreamJson format uses NDJSON line parsing (Claude)
+        // CopilotStreamJson format uses JSONL line parsing (Copilot prompt mode)
         // PiStreamJson format uses NDJSON line parsing (Pi)
         // Text format streams raw output directly to handler
         let is_stream_json = output_format == OutputFormat::StreamJson;
+        let is_copilot_stream = output_format == OutputFormat::CopilotStreamJson;
         let is_pi_stream = output_format == OutputFormat::PiStreamJson;
         // Pi thinking deltas are noisy for plain console output but useful in TUI.
         let show_pi_thinking = is_pi_stream && self.tui_mode;
@@ -781,6 +784,19 @@ impl PtyExecutor {
                                             dispatch_stream_event(event, handler, &mut extracted_text);
                                         }
                                     }
+                                } else if is_copilot_stream {
+                                    line_buffer.push_str(text);
+
+                                    while let Some(newline_pos) = line_buffer.find('\n') {
+                                        let line = line_buffer[..newline_pos].to_string();
+                                        line_buffer = line_buffer[newline_pos + 1..].to_string();
+
+                                        handle_copilot_stream_line(
+                                            &line,
+                                            handler,
+                                            &mut extracted_text,
+                                        );
+                                    }
                                 } else if is_pi_stream {
                                     // PiStreamJson format: Parse NDJSON lines from pi
                                     line_buffer.push_str(text);
@@ -828,6 +844,12 @@ impl PtyExecutor {
                                     });
                                 }
                                 dispatch_stream_event(event, handler, &mut extracted_text);
+                            } else if is_copilot_stream && !line_buffer.is_empty() {
+                                handle_copilot_stream_line(
+                                    &line_buffer,
+                                    handler,
+                                    &mut extracted_text,
+                                );
                             } else if is_pi_stream && !line_buffer.is_empty()
                                 && let Some(event) = PiStreamParser::parse_line(&line_buffer)
                             {
@@ -905,6 +927,13 @@ impl PtyExecutor {
                                         dispatch_stream_event(event, handler, &mut extracted_text);
                                     }
                                 }
+                            } else if is_copilot_stream {
+                                line_buffer.push_str(text);
+                                while let Some(newline_pos) = line_buffer.find('\n') {
+                                    let line = line_buffer[..newline_pos].to_string();
+                                    line_buffer = line_buffer[newline_pos + 1..].to_string();
+                                    handle_copilot_stream_line(&line, handler, &mut extracted_text);
+                                }
                             } else if is_pi_stream {
                                 // PiStreamJson: parse NDJSON lines
                                 line_buffer.push_str(text);
@@ -970,6 +999,17 @@ impl PtyExecutor {
                                             );
                                         }
                                     }
+                                } else if is_copilot_stream {
+                                    line_buffer.push_str(text);
+                                    while let Some(newline_pos) = line_buffer.find('\n') {
+                                        let line = line_buffer[..newline_pos].to_string();
+                                        line_buffer = line_buffer[newline_pos + 1..].to_string();
+                                        handle_copilot_stream_line(
+                                            &line,
+                                            handler,
+                                            &mut extracted_text,
+                                        );
+                                    }
                                 } else if is_pi_stream {
                                     // PiStreamJson: parse NDJSON lines
                                     line_buffer.push_str(text);
@@ -1022,6 +1062,8 @@ impl PtyExecutor {
                         });
                     }
                     dispatch_stream_event(event, handler, &mut extracted_text);
+                } else if is_copilot_stream && !line_buffer.is_empty() {
+                    handle_copilot_stream_line(&line_buffer, handler, &mut extracted_text);
                 } else if is_pi_stream
                     && !line_buffer.is_empty()
                     && let Some(event) = PiStreamParser::parse_line(&line_buffer)
@@ -1678,6 +1720,17 @@ impl PtyExecutor {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
             }
         }
+    }
+}
+
+fn handle_copilot_stream_line<H: StreamHandler>(
+    line: &str,
+    handler: &mut H,
+    extracted_text: &mut String,
+) {
+    if let Some(text) = CopilotStreamParser::extract_text(line) {
+        handler.on_text(&text);
+        CopilotStreamParser::append_text_chunk(extracted_text, &text);
     }
 }
 
