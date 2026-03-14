@@ -135,6 +135,33 @@ fn test_task_close_and_fail_update_status() {
 }
 
 #[test]
+fn test_task_ready_all_shows_tasks_from_all_loops() {
+    let temp_dir = TempDir::new().expect("temp dir");
+    let temp_path = temp_dir.path();
+
+    let ralph_dir = temp_path.join(".ralph");
+    std::fs::create_dir_all(&ralph_dir).expect("create .ralph");
+
+    // Create tasks under different loop IDs (simulating sequential runs)
+    std::fs::write(ralph_dir.join("current-loop-id"), "primary-run-1").expect("write run 1");
+    ralph_task_ok(temp_path, &["add", "Task from run 1"]);
+
+    std::fs::write(ralph_dir.join("current-loop-id"), "primary-run-2").expect("write run 2");
+    ralph_task_ok(temp_path, &["add", "Task from run 2"]);
+
+    // Without --all, only run-2 tasks are visible
+    let stdout = ralph_task_ok(temp_path, &["ready", "--format", "json"]);
+    let filtered: Vec<Task> = serde_json::from_str(&stdout).expect("parse");
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].title, "Task from run 2");
+
+    // With --all, both tasks are visible
+    let stdout = ralph_task_ok(temp_path, &["ready", "--all", "--format", "json"]);
+    let all: Vec<Task> = serde_json::from_str(&stdout).expect("parse");
+    assert_eq!(all.len(), 2);
+}
+
+#[test]
 fn test_task_show_json() {
     let temp_dir = TempDir::new().expect("temp dir");
     let temp_path = temp_dir.path();

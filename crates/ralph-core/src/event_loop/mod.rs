@@ -1316,9 +1316,14 @@ impl EventLoop {
             }
         };
 
-        let ready = store.ready();
-        let open = store.open();
-        let closed_count = store.all().len() - open.len();
+        let current_loop_id = self.current_loop_id();
+
+        let ready = Self::filter_tasks_by_loop(store.ready(), current_loop_id.as_deref());
+        let open = Self::filter_tasks_by_loop(store.open(), current_loop_id.as_deref());
+        let all_count =
+            Self::filter_tasks_by_loop(store.all().iter().collect(), current_loop_id.as_deref())
+                .len();
+        let closed_count = all_count - open.len();
 
         if open.is_empty() && closed_count == 0 {
             return prompt;
@@ -1764,6 +1769,35 @@ impl EventLoop {
         Ok(!has_pending)
     }
 
+    /// Reads the current loop ID from the marker file.
+    ///
+    /// Returns `None` if no marker exists or is empty, which means
+    /// task queries should be unfiltered (backwards compatible).
+    fn current_loop_id(&self) -> Option<String> {
+        self.loop_context
+            .as_ref()
+            .and_then(|ctx| {
+                let marker_path = ctx.ralph_dir().join("current-loop-id");
+                std::fs::read_to_string(&marker_path).ok()
+            })
+            .map(|id| id.trim().to_string())
+            .filter(|id| !id.is_empty())
+    }
+
+    /// Filters a task list by loop ID. When `loop_id` is `None`, returns all tasks.
+    fn filter_tasks_by_loop<'a>(
+        tasks: Vec<&'a crate::task::Task>,
+        loop_id: Option<&str>,
+    ) -> Vec<&'a crate::task::Task> {
+        match loop_id {
+            Some(id) => tasks
+                .into_iter()
+                .filter(|t| t.loop_id.as_deref() == Some(id))
+                .collect(),
+            None => tasks,
+        }
+    }
+
     fn verify_tasks_complete(&self) -> Result<bool, std::io::Error> {
         use crate::task_store::TaskStore;
 
@@ -1775,7 +1809,9 @@ impl EventLoop {
         }
 
         let store = TaskStore::load(&tasks_path)?;
-        Ok(!store.has_pending_tasks())
+        let current_loop_id = self.current_loop_id();
+        let open = Self::filter_tasks_by_loop(store.open(), current_loop_id.as_deref());
+        Ok(open.is_empty())
     }
 
     /// Builds a [`CheckinContext`] with current loop state for robot check-ins.
@@ -1794,7 +1830,6 @@ impl EventLoop {
     /// Returns `(open_count, closed_count)`. "Open" means non-terminal tasks,
     /// "closed" means tasks with `TaskStatus::Closed`.
     fn count_tasks(&self) -> (usize, usize) {
-        use crate::task::TaskStatus;
         use crate::task_store::TaskStore;
 
         let tasks_path = self.tasks_path();
@@ -1804,19 +1839,14 @@ impl EventLoop {
 
         match TaskStore::load(&tasks_path) {
             Ok(store) => {
-                let total = store.all().len();
-                let open = store.open().len();
-                let closed = total - open;
-                // Verify: closed should match Closed status count
-                debug_assert_eq!(
-                    closed,
-                    store
-                        .all()
-                        .iter()
-                        .filter(|t| t.status == TaskStatus::Closed)
-                        .count()
+                let current_loop_id = self.current_loop_id();
+                let all = Self::filter_tasks_by_loop(
+                    store.all().iter().collect(),
+                    current_loop_id.as_deref(),
                 );
-                (open, closed)
+                let open = Self::filter_tasks_by_loop(store.open(), current_loop_id.as_deref());
+                let closed = all.len() - open.len();
+                (open.len(), closed)
             }
             Err(_) => (0, 0),
         }
@@ -1828,8 +1858,9 @@ impl EventLoop {
 
         let tasks_path = self.tasks_path();
         if let Ok(store) = TaskStore::load(&tasks_path) {
-            return store
-                .open()
+            let current_loop_id = self.current_loop_id();
+            let open = Self::filter_tasks_by_loop(store.open(), current_loop_id.as_deref());
+            return open
                 .iter()
                 .map(|t| format!("{}: {}", t.id, t.title))
                 .collect();
