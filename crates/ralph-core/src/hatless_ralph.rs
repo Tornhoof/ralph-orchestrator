@@ -414,31 +414,17 @@ Its content is auto-injected in `<scratchpad>` tags at the top of your context e
         // (see EventLoop::inject_memories_and_tools_skill)
         // TASK BREAKDOWN guidance moved into ralph-tools.md
 
-        // Add state management guidance
+        // Add state management guidance (tasks/memories descriptions now live in their respective skills)
         prompt.push_str(&format!(
             "### STATE MANAGEMENT\n\n\
-**Tasks** (`ralph tools task`) — What needs to be done:\n\
-- Work items, their status, priorities, and dependencies\n\
-- Source of truth for progress across iterations\n\
-- Auto-injected in `<ready-tasks>` tags at the top of your context\n\
-- Use `ensure` for stable/idempotent work items, `start` when you begin, `close` when verified, and `reopen`/`fail` when work must continue later\n\
-\n\
 **Scratchpad** (`{scratchpad}`) — Your thinking:\n\
 - Current understanding and reasoning\n\
 - Analysis notes, decisions, plan narrative\n\
 - NOT for checklists or status tracking\n\
 \n\
-**Memories** (`.ralph/agent/memories.md`) — Persistent learning:\n\
-- Codebase patterns and conventions\n\
-- Architectural decisions and rationale\n\
-- Recurring problem solutions\n\
-- Search before acting in unfamiliar areas; add durable learnings when they will help future runs\n\
-\n\
 **Context Files** (`.ralph/agent/*.md`) — Research artifacts:\n\
 - Analysis and temporary notes\n\
 - Read when relevant\n\
-\n\
-**Rule:** Work items go in tasks. Thinking goes in scratchpad. Learnings go in memories. Decisions with confidence <= 80 go in `.ralph/agent/decisions.md`.\n\
 \n\
 **Tool reliability rule:** Assume the workflow commands are available when the loop is already running and use the task-specific command you actually need.\n\
 The loop sets `$RALPH_BIN` to the current Ralph executable. Prefer `$RALPH_BIN emit ...` and `$RALPH_BIN tools ...` when you need a direct command form.\n\
