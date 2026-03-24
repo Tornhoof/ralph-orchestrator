@@ -12,14 +12,14 @@
 
 | File | Purpose | When to Consult |
 |------|---------|-----------------|
-| [`codebase_info.md`](.agents/summary/codebase_info.md) | Project identity, tech stack, workspace structure, platforms | Understanding project basics, technology choices, file organization |
-| [`architecture.md`](.agents/summary/architecture.md) | System architecture, design patterns, core principles | Understanding how the system works, why design decisions were made |
-| [`components.md`](.agents/summary/components.md) | Detailed breakdown of every crate, module, and web package | Finding specific code, understanding module responsibilities |
-| [`interfaces.md`](.agents/summary/interfaces.md) | Rust traits, JSON-RPC protocol, CLI commands, REST API, EventBus | Understanding APIs, integration points, communication protocols |
-| [`data_models.md`](.agents/summary/data_models.md) | All data structures, configuration types, file formats | Understanding data flow, configuration options, state management |
-| [`workflows.md`](.agents/summary/workflows.md) | End-to-end workflows with Mermaid diagrams | Understanding execution flows, debugging, process tracing |
-| [`dependencies.md`](.agents/summary/dependencies.md) | External dependencies, internal crate graph, build tools | Understanding dependency choices, version constraints |
-| [`review_notes.md`](.agents/summary/review_notes.md) | Documentation consistency and completeness review | Identifying gaps, planning documentation improvements |
+| [`codebase_info.md`](codebase_info.md) | Project identity, tech stack, workspace structure, platforms | Understanding project basics, technology choices, file organization |
+| [`architecture.md`](architecture.md) | System architecture, design patterns, core principles | Understanding how the system works, why design decisions were made |
+| [`components.md`](components.md) | Detailed breakdown of every crate, module, and web package | Finding specific code, understanding module responsibilities |
+| [`interfaces.md`](interfaces.md) | Rust traits, JSON-RPC protocol, CLI commands, REST API, EventBus | Understanding APIs, integration points, communication protocols |
+| [`data_models.md`](data_models.md) | All data structures, configuration types, file formats | Understanding data flow, configuration options, state management |
+| [`workflows.md`](workflows.md) | End-to-end workflows with Mermaid diagrams | Understanding execution flows, debugging, process tracing |
+| [`dependencies.md`](dependencies.md) | External dependencies, internal crate graph, build tools | Understanding dependency choices, version constraints |
+| [`review_notes.md`](review_notes.md) | Documentation consistency and completeness review | Identifying gaps, planning documentation improvements |
 
 ## Quick Reference
 
